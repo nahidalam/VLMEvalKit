@@ -4,7 +4,7 @@ gradio
 huggingface_hub
 imageio
 matplotlib
-numpy
+numpy<2
 omegaconf
 openai
 opencv-python>=4.4.0.46
