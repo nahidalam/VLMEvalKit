@@ -654,6 +654,7 @@ qwen_series = {
 }
 
 llava_series = {
+    "LLaVA-SigLIP2" : partial(LLaVA, model_path = "nahidalam/LLaVA-1.5-SigLIP2"),    
     "llava_v1.5_7b": partial(LLaVA, model_path="liuhaotian/llava-v1.5-7b"),
     "llava_v1.5_13b": partial(LLaVA, model_path="liuhaotian/llava-v1.5-13b"),
     "llava_v1_7b": partial(LLaVA, model_path=LLAVA_V1_7B_MODEL_PTH),
