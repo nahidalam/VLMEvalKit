@@ -88,32 +88,32 @@ o1_apis = {
         GPT4V,
         model="o1-2024-12-17",
         key=o1_key,
-        api_base=o1_base, 
+        api_base=o1_base,
         temperature=0,
         img_detail='high',
         retry=3,
-        timeout=1800, 
+        timeout=1800,
         max_tokens=16384,
         verbose=False,
 
     ),
     'o3': partial(
-        GPT4V, 
+        GPT4V,
         model="o3-2025-04-16",
         key=o1_key,
-        api_base=o1_base, 
+        api_base=o1_base,
         temperature=0,
         img_detail='high',
         retry=3,
-        timeout=1800, 
-        max_tokens=16384, 
+        timeout=1800,
+        max_tokens=16384,
         verbose=False,
     ),
     'o4-mini': partial(
-        GPT4V, 
+        GPT4V,
         model="o4-mini-2025-04-16",
         key=o1_key,
-        api_base=o1_base, 
+        api_base=o1_base,
         temperature=0,
         img_detail='high',
         retry=3,
@@ -216,13 +216,13 @@ api_models = {
         verbose=False,
     ),
     "GPT4.5": partial(
-        GPT4V, 
+        GPT4V,
         model='gpt-4.5-preview-2025-02-27',
-        temperature=0, 
+        temperature=0,
         timeout=600,
-        img_size=-1, 
-        img_detail='high', 
-        retry=10, 
+        img_size=-1,
+        img_detail='high',
+        retry=10,
         verbose=False,
     ),
     "gpt-4.1-2025-04-14": partial(
@@ -307,7 +307,7 @@ api_models = {
     "GeminiPro2-5": partial(
         Gemini, model="gemini-2.5-pro", temperature=0, retry=10
     ),
-    
+
     # Qwen-VL
     "QwenVLPlus": partial(QwenVLAPI, model="qwen-vl-plus", temperature=0, retry=10),
     "QwenVLMax": partial(QwenVLAPI, model="qwen-vl-max", temperature=0, retry=10),
@@ -488,13 +488,13 @@ api_models = {
         timeout=300,
     ),
     'Taichu-VLR-3B': partial(
-        TaichuVLRAPI, 
-        model='taichu_vlr_3b', 
+        TaichuVLRAPI,
+        model='taichu_vlr_3b',
         url="https://platform.wair.ac.cn/maas/v1/chat/completions"
     ),
     'Taichu-VLR-7B': partial(
-        TaichuVLRAPI, 
-        model='taichu_vlr_7b', 
+        TaichuVLRAPI,
+        model='taichu_vlr_7b',
         url="https://platform.wair.ac.cn/maas/v1/chat/completions"
     ),
     # doubao_vl
@@ -502,44 +502,44 @@ api_models = {
         DoubaoVL, model="Doubao-1.5-vision-pro", temperature=0, retry=3, verbose=False
     ),
     "Seed1.5-VL": partial(
-        DoubaoVL, 
-        model="doubao-1-5-thinking-vision-pro-250428", 
+        DoubaoVL,
+        model="doubao-1-5-thinking-vision-pro-250428",
         temperature=0,
-        retry=3, 
-        verbose=False, 
+        retry=3,
+        verbose=False,
         max_tokens=16384,
     ),
     "Seed1.6": partial(
-        DoubaoVL, 
-        model="doubao-seed-1.6-250615", 
+        DoubaoVL,
+        model="doubao-seed-1.6-250615",
         temperature=0,
-        retry=3, 
-        verbose=False, 
+        retry=3,
+        verbose=False,
         max_tokens=16384,
     ),
     "Seed1.6-Flash": partial(
-        DoubaoVL, 
-        model="doubao-seed-1.6-flash-250615", 
+        DoubaoVL,
+        model="doubao-seed-1.6-flash-250615",
         temperature=0,
-        retry=3, 
-        verbose=False, 
+        retry=3,
+        verbose=False,
         max_tokens=16384,
     ),
     "Seed1.6-Thinking": partial(
-        DoubaoVL, 
-        model="doubao-seed-1.6-thinking-250615", 
+        DoubaoVL,
+        model="doubao-seed-1.6-thinking-250615",
         temperature=0,
-        retry=3, 
-        verbose=False, 
+        retry=3,
+        verbose=False,
         max_tokens=16384,
     ),
     # Shopee MUG-U
     'MUG-U-7B': partial(
-        MUGUAPI, 
-        model='MUG-U', 
-        temperature=0,  
-        retry=10, 
-        verbose=False, 
+        MUGUAPI,
+        model='MUG-U',
+        temperature=0,
+        retry=10,
+        verbose=False,
         timeout=300),
     # grok
     "grok-vision-beta": partial(
@@ -562,7 +562,7 @@ api_models = {
         api_base="https://api.x.ai/v1/chat/completions",
         temperature=0,
         retry=3,
-        timeout=1200, 
+        timeout=1200,
         max_tokens=16384
     ),
     # kimi
@@ -589,16 +589,16 @@ api_models = {
     ),
     'ernie4.5-turbo': partial(
         GPT4V,
-        model='ernie-4.5-turbo-vl-32k', 
+        model='ernie-4.5-turbo-vl-32k',
         temperature=0,
-        retry=3, 
-        max_tokens=12000, 
+        retry=3,
+        max_tokens=12000,
     ),
     'ernie4.5-a3b': partial(
         GPT4V,
-        model='ernie-4.5-vl-28b-a3b', 
+        model='ernie-4.5-vl-28b-a3b',
         temperature=0,
-        retry=3, 
+        retry=3,
         max_tokens=8000,
     )
 }
@@ -633,8 +633,6 @@ minicpm_series = {
     ),
     "MiniCPM-V-2_6": partial(MiniCPM_V_2_6, model_path="openbmb/MiniCPM-V-2_6"),
     "MiniCPM-o-2_6": partial(MiniCPM_o_2_6, model_path="openbmb/MiniCPM-o-2_6"),
-    "MiniCPM-V-4": partial(MiniCPM_V_4, model_path="openbmb/MiniCPM-V-4"),
-    "MiniCPM-V-4_5": partial(MiniCPM_V_4_5, model_path="openbmb/MiniCPM-V-4_5"),
 }
 
 xtuner_series = {
@@ -700,6 +698,13 @@ llava_series = {
     "llava_v1_7b": partial(LLaVA, model_path=LLAVA_V1_7B_MODEL_PTH),
     "sharegpt4v_7b": partial(LLaVA, model_path="Lin-Chen/ShareGPT4V-7B"),
     "sharegpt4v_13b": partial(LLaVA, model_path="Lin-Chen/ShareGPT4V-13B"),
+    "llava_v1.5_7b_finetune_aimv2": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-aimv2"),
+    "llava_v1.5_7b_finetune_mrope_aimv2": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-mrope-aimv2"),
+    "llava_v1.5_7b_finetune_mrope_clip": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-mrope-clip"),
+    "llava_v1.5_7b_finetune_mrope_siglip_base_patch16_256": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-mrope-siglip-base-patch16-256"),
+    "llava_v1.5_7b_finetune_mrope_siglip2_base_patch16_256": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-mrope-siglip2-base-patch16-256"),
+    "llava_v1.5_7b_finetune_siglip": partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-siglip"),
+    "llava_v1.5_7b_finetune_siglip2" : partial(LLaVA, model_path="/home/mchorse/custom_llava_models/llava-v1.5-7b-finetune-siglip2"),
     "llava_next_vicuna_7b": partial(
         LLaVA_Next, model_path="llava-hf/llava-v1.6-vicuna-7b-hf"
     ),
@@ -928,15 +933,15 @@ internvl2_5_mpo = {
     ),
     "InternVL2_5-8B-GUI": partial(
         InternVLChat,
-        model_path="/fs-computility/mllm1/shared/zhaoxiangyu/models/internvl2_5_8b_internlm2_5_7b_dynamic_res_stage1", 
-        version="V2.0", 
+        model_path="/fs-computility/mllm1/shared/zhaoxiangyu/models/internvl2_5_8b_internlm2_5_7b_dynamic_res_stage1",
+        version="V2.0",
         max_new_tokens=512,
         screen_parse=False,
     ),
      "InternVL3-7B-GUI": partial(
         InternVLChat,
-        model_path="/fs-computility/mllm1/shared/zhaoxiangyu/GUI/checkpoints/internvl3_7b_dynamic_res_stage1_56/", 
-        version="V2.0", 
+        model_path="/fs-computility/mllm1/shared/zhaoxiangyu/GUI/checkpoints/internvl3_7b_dynamic_res_stage1_56/",
+        version="V2.0",
         max_new_tokens=512,
         screen_parse=False,
     ),
@@ -1038,10 +1043,8 @@ sail_series = {
     "SAIL-VL-1.5-2B": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d5-2B", use_msac = True),
     "SAIL-VL-1.5-8B": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d5-8B", use_msac = True),
     "SAIL-VL-1.6-8B": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d6-8B", use_msac = True),
-    "SAIL-VL-1.7-Thinking-2B-2507": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d7-Thinking-2B-2507", use_msac = True, use_cot=True, max_new_tokens=4096),
-    "SAIL-VL-1.7-Thinking-8B-2507": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d7-Thinking-8B-2507", use_msac = True, use_cot=True, max_new_tokens=4096),
-    "SAIL-VL2-2B": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL2-2B", use_msac = True),
-    "SAIL-VL2-8B": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL2-8B", use_msac = True),
+    "SAIL-VL-1.7-Thinking-2B-2507": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d7-Thinking-2B-2507", use_msac = True, use_cot=True),
+    "SAIL-VL-1.7-Thinking-8B-2507": partial(SailVL, model_path="BytedanceDouyinContent/SAIL-VL-1d7-Thinking-8B-2507", use_msac = True, use_cot=True),
 }
 
 ristretto_series = {
@@ -1421,16 +1424,16 @@ qwen2vl_series = {
         use_custom_prompt=False,
     ),
     'VLM-R1': partial(
-        VLMR1Chat, 
-        model_path='omlab/VLM-R1-Qwen2.5VL-3B-Math-0305', 
-        min_pixels=1280*28*28, 
-        max_pixels=16384*28*28, 
+        VLMR1Chat,
+        model_path='omlab/VLM-R1-Qwen2.5VL-3B-Math-0305',
+        min_pixels=1280*28*28,
+        max_pixels=16384*28*28,
         use_custom_prompt=False),
     'VLAA-Thinker-Qwen2.5VL-3B': partial(
-        VLAAThinkerChat, 
-        model_path='UCSC-VLAA/VLAA-Thinker-Qwen2.5VL-3B', 
-        min_pixels=1280*28*28, 
-        max_pixels=16384*28*28, 
+        VLAAThinkerChat,
+        model_path='UCSC-VLAA/VLAA-Thinker-Qwen2.5VL-3B',
+        min_pixels=1280*28*28,
+        max_pixels=16384*28*28,
         use_custom_prompt=False,
         post_process=True, # post processing for evaluation
         system_prompt=(''
@@ -1443,10 +1446,10 @@ qwen2vl_series = {
                 ),
     ),
     'VLAA-Thinker-Qwen2.5VL-7B': partial(
-        VLAAThinkerChat, 
-        model_path='UCSC-VLAA/VLAA-Thinker-Qwen2.5VL-7B', 
-        min_pixels=1280*28*28, 
-        max_pixels=16384*28*28, 
+        VLAAThinkerChat,
+        model_path='UCSC-VLAA/VLAA-Thinker-Qwen2.5VL-7B',
+        min_pixels=1280*28*28,
+        max_pixels=16384*28*28,
         use_custom_prompt=False,
         post_process=True, # post processing for evaluation
         system_prompt=(''
@@ -1459,10 +1462,10 @@ qwen2vl_series = {
                 ),
     ),
     'WeThink-Qwen2.5VL-7B': partial(
-        WeThinkVL, 
-        model_path='yangjie-cv/WeThink-Qwen2.5VL-7B', 
-        min_pixels=1280*28*28, 
-        max_pixels=16384*28*28, 
+        WeThinkVL,
+        model_path='yangjie-cv/WeThink-Qwen2.5VL-7B',
+        min_pixels=1280*28*28,
+        max_pixels=16384*28*28,
         use_custom_prompt=False,
         system_prompt=("You FIRST think about the reasoning process as an internal monologue and then provide the final answer.\nThe reasoning process MUST BE enclosed within <think> </think> tags. The final answer MUST BE enclosed within <answer> </answer> tags."
         ),
@@ -1567,7 +1570,7 @@ ross_series = {
 
 ursa_series = {
     "URSA-8B": partial(UrsaChat, model_path="URSA-MATH/URSA-8B"),
-    "URSA-8B-PS-GRPO": partial(UrsaChat, model_path="URSA-MATH/URSA-8B-PS-GRPO")    
+    "URSA-8B-PS-GRPO": partial(UrsaChat, model_path="URSA-MATH/URSA-8B-PS-GRPO")
 }
 
 gemma_series = {
@@ -1608,9 +1611,9 @@ oryx_series = {
     'oryx': partial(Oryx, model_path="THUdyh/Oryx-1.5-7B"),
 }
 
-# recommend: vllm serve moonshotai/Kimi-VL-A3B-Thinking-2506 
+# recommend: vllm serve moonshotai/Kimi-VL-A3B-Thinking-2506
 # --served-model-name api-kimi-vl-thinking-2506 --trust-remote-code
-# --tensor-parallel-size 2 --max-num-batched-tokens 131072 
+# --tensor-parallel-size 2 --max-num-batched-tokens 131072
 # --max-model-len 131072 --limit-mm-per-prompt image=256
 kimi_vllm_series = {
     "api-kimi-vl-thinking-2506": partial(
@@ -1632,7 +1635,7 @@ kimi_vllm_series = {
 
 treevgr_series = {
     'TreeVGR-7B': partial(
-        TreeVGR, 
+        TreeVGR,
         model_path='HaochenWang/TreeVGR-7B',
         min_pixels=1280*28*28, max_pixels=16384*28*28,
     ),
@@ -1654,13 +1657,8 @@ qtunevl_series = {
     ),
 }
 
-logics_series = {
-    "Logics-Thinking": partial(Logics_Thinking,model_path='Logics-MLLM/Logics-Thinking'),
-}
-
-
 internvl_groups = [
-    internvl, internvl2, internvl2_5, mini_internvl, internvl2_5_mpo, 
+    internvl, internvl2, internvl2_5, mini_internvl, internvl2_5_mpo,
     internvl3, internvl3_5
 ]
 internvl_series = {}
@@ -1671,17 +1669,17 @@ supported_VLM = {}
 
 model_groups = [
     ungrouped, o1_apis, api_models, xtuner_series, qwen_series, llava_series, granite_vision_series,
-    internvl_series, yivl_series, xcomposer_series, minigpt4_series, 
-    idefics_series, instructblip_series, deepseekvl_series, deepseekvl2_series, 
-    janus_series, minicpm_series, cogvlm_series, wemm_series, cambrian_series, 
+    internvl_series, yivl_series, xcomposer_series, minigpt4_series,
+    idefics_series, instructblip_series, deepseekvl_series, deepseekvl2_series,
+    janus_series, minicpm_series, cogvlm_series, wemm_series, cambrian_series,
     chameleon_series, video_models, ovis_series, vila_series, mantis_series,
     mmalaya_series, phi3_series, phi4_series, xgen_mm_series, qwen2vl_series,
     slime_series, eagle_series, moondream_series, llama_series, molmo_series,
     kosmos_series, points_series, nvlm_series, vintern_series, h2ovl_series,
     aria_series, smolvlm_series, sail_series, valley_series, vita_series,
     ross_series, emu_series, ola_series, ursa_series, gemma_series,
-    long_vita_series, ristretto_series, kimi_series, aguvis_series, hawkvl_series, 
-    flash_vl, kimi_vllm_series, oryx_series, treevgr_series, varco_vision_series, qtunevl_series, xvl_series, thyme_series,logics_series
+    long_vita_series, ristretto_series, kimi_series, aguvis_series, hawkvl_series,
+    flash_vl, kimi_vllm_series, oryx_series, treevgr_series, varco_vision_series, qtunevl_series, xvl_series, thyme_series
 ]
 
 for grp in model_groups:

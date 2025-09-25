@@ -299,7 +299,8 @@ def CIRCULAR(inp):
 
 
 PTH = osp.realpath(__file__)
-IMAGE_PTH = osp.join(osp.dirname(PTH), '../assets/apple.jpg')
+#IMAGE_PTH = osp.join(osp.dirname(PTH), '../assets/apple.jpg')
+IMAGE_PTH = osp.join(osp.dirname(PTH), '../assets/022.jpg')
 
 msg1 = [
     IMAGE_PTH,
@@ -314,10 +315,15 @@ msg3 = [
     IMAGE_PTH,
     'How many apples are there in these images?'
 ]
+# msg4 = [
+#     dict(type='image', value=IMAGE_PTH),
+#     dict(type='image', value=IMAGE_PTH),
+#     dict(type='text', value='How many apples are there in these images?')
+# ]
 msg4 = [
     dict(type='image', value=IMAGE_PTH),
     dict(type='image', value=IMAGE_PTH),
-    dict(type='text', value='How many apples are there in these images?')
+    dict(type='text', value='Describe this image')
 ]
 
 
@@ -497,8 +503,7 @@ def SCAN_ONE(root, model, dataset):
     from termcolor import colored
     FAIL_MSG = 'Failed to obtain answer via API.'
     root = osp.join(root, model)
-    pred_format = get_pred_file_format()
-    fname = f'{model}_{dataset}.{pred_format}'
+    fname = f'{model}_{dataset}.xlsx'
     pth = osp.join(root, fname)
     if osp.exists(pth):
         data = load(pth)
@@ -550,8 +555,7 @@ def SCAN(root, models, datasets):
         cur_datasets = []
         if len(datasets) == 0:
             for d in SUPPORTED_DATASETS:
-                pred_format = get_pred_file_format()
-                if osp.exists(osp.join(root, m, f'{m}_{d}.{pred_format}')):
+                if osp.exists(osp.join(root, m, f'{m}_{d}.xlsx')):
                     cur_datasets.append(d)
         else:
             cur_datasets = datasets

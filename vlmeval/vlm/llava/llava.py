@@ -8,6 +8,9 @@ from ...smp import *
 from ...dataset import DATASET_TYPE, DATASET_MODALITY
 import copy
 import requests
+import sys
+
+sys.path.append("/home/mchorse/VLMEvalKit/vlmeval/vlm/llava/LLaVA")
 
 
 class LLaVA(BaseModel):
@@ -213,6 +216,7 @@ class LLaVA(BaseModel):
         stopping_criteria = KeywordsStoppingCriteria(
             keywords, self.tokenizer, input_ids
         )
+
         with torch.inference_mode():
             output_ids = self.model.generate(
                 input_ids,
@@ -220,10 +224,13 @@ class LLaVA(BaseModel):
                 stopping_criteria=[stopping_criteria],
                 **self.kwargs,
             )
-
+        num_imgs = len(images)
+        #print(f"[dbg] imgs={num_imgs} tokens_in={input_ids.shape[1]} gen_len={output_ids}")
+        #print(f"[dbg] output_ids_sum:{torch.sum(output_ids)}")
         output = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[
             0
         ].strip()
+        #print(f"[dbg] output: {output}")
         return output
 
 
