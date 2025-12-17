@@ -1,11 +1,14 @@
 import sys
 import os.path as osp
+from os.path import expanduser
 from vlmeval.dataset import SUPPORTED_DATASETS
 from vlmeval.config import *
 from vlmeval.smp import *
 
 PTH = osp.realpath(__file__)
-IMAGE_PTH = osp.join(osp.dirname(PTH), 'assets/022.jpg')
+#IMAGE_PTH = osp.join(osp.dirname(PTH), '~/VLMEvalKit/assets/022.jpg')
+# Use expanduser to expand ~ or use absolute path
+IMAGE_PTH = expanduser('~/VLMEvalKit/assets/022.jpg')
 
 def CHECK(val, msg):
     if val in supported_VLM:
@@ -33,7 +36,7 @@ if __name__ == "__main__":
         dict(type='image', value=IMAGE_PTH),
         dict(type='text', value=text_prompt)
     ]
-
+    ''' 
     model_list = [
         "llava_v1.5_7b",
         "llava_v1.5_7b_finetune_mrope_clip",
@@ -45,6 +48,8 @@ if __name__ == "__main__":
         "llava_v1.5_7b_finetune_mrope_aimv2",
         "Qwen2.5-VL-7B-Instruct"
     ]
+    '''
+    model_list = ["llava_v1.5_7b"]
 
     results = []
     for m in model_list:

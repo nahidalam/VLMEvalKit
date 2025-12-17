@@ -10,7 +10,7 @@ import copy
 import requests
 import sys
 
-sys.path.append("/home/mchorse/VLMEvalKit/vlmeval/vlm/llava/LLaVA")
+sys.path.append("~/VLMEvalKit/vlmeval/vlm/llava/LLaVA")
 
 
 class LLaVA(BaseModel):
