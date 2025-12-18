@@ -829,6 +829,144 @@ if __name__ == "__main__":
         rate = stats['consistent'] / total if total > 0 else 0
         print(f"{t:<15} {stats['consistent']:<12} {stats['inconsistent']:<12} {rate:.2%}")
     
+    # ========================================================================
+    # PRINT DETAILED PER-IMAGE BREAKDOWN
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("DETAILED PER-IMAGE BREAKDOWN")
+    print("="*80)
+    
+    # Collect all unique images
+    all_images = set()
+    for result in all_results:
+        if 'image_results' in result:
+            for img_result in result['image_results']:
+                if 'image' in img_result:
+                    all_images.add(os.path.basename(img_result['image']))
+    all_images = sorted(all_images)
+    
+    # Build per-image stats for each model
+    image_model_stats = {}  # {image: {model: {consistent, inconsistent, rate}}}
+    
+    for result in all_results:
+        model_name = result['model']
+        if 'image_results' not in result:
+            continue
+        
+        for img_result in result['image_results']:
+            if 'image' not in img_result or 'metrics' not in img_result:
+                continue
+            
+            img_name = os.path.basename(img_result['image'])
+            if img_name not in image_model_stats:
+                image_model_stats[img_name] = {}
+            
+            metrics = img_result['metrics']
+            total = metrics['consistent'] + metrics['inconsistent']
+            rate = metrics['consistent'] / total if total > 0 else 0.0
+            
+            image_model_stats[img_name][model_name] = {
+                'consistent': metrics['consistent'],
+                'inconsistent': metrics['inconsistent'],
+                'undetermined': metrics['undetermined'],
+                'total': total,
+                'rate': rate
+            }
+    
+    # Print per-image table
+    for img_name in sorted(image_model_stats.keys()):
+        print(f"\n📷 Image: {img_name}")
+        print("-" * 80)
+        print(f"  {'Model':<53} {'Rate':<10} {'✓':<6} {'✗':<6} {'?':<6}")
+        print("  " + "-" * 76)
+        
+        model_stats = image_model_stats[img_name]
+        for model_name in model_list:
+            if model_name in model_stats:
+                stats = model_stats[model_name]
+                print(f"  {model_name:<53} {stats['rate']:.2%}     {stats['consistent']:<6} {stats['inconsistent']:<6} {stats['undetermined']:<6}")
+            else:
+                print(f"  {model_name:<53} {'N/A':<10}")
+    
+    # ========================================================================
+    # PRINT IMAGE RANKING (BEST TO WORST CONSISTENCY)
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("IMAGE RANKING BY AVERAGE CONSISTENCY (across all models)")
+    print("="*80)
+    
+    image_avg_rates = {}
+    for img_name, model_stats in image_model_stats.items():
+        rates = [s['rate'] for s in model_stats.values() if s['total'] > 0]
+        if rates:
+            image_avg_rates[img_name] = sum(rates) / len(rates)
+    
+    print(f"\n{'Rank':<6} {'Image':<40} {'Avg Consistency':<15}")
+    print("-" * 65)
+    
+    for rank, (img_name, avg_rate) in enumerate(sorted(image_avg_rates.items(), key=lambda x: -x[1]), 1):
+        print(f"{rank:<6} {img_name:<40} {avg_rate:.2%}")
+    
+    # ========================================================================
+    # PRINT MODEL RANKING PER IMAGE
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("MODEL RANKING BY IMAGE")
+    print("="*80)
+    
+    for img_name in sorted(image_model_stats.keys()):
+        print(f"\n📷 {img_name}")
+        model_rates = [(m, s['rate'], s['total']) for m, s in image_model_stats[img_name].items() if s['total'] > 0]
+        model_rates.sort(key=lambda x: -x[1])
+        
+        for rank, (model_name, rate, total) in enumerate(model_rates, 1):
+            # Truncate model name for display
+            display_name = model_name[:45] + "..." if len(model_name) > 48 else model_name
+            bar = "█" * int(rate * 20) + "░" * (20 - int(rate * 20))
+            print(f"   {rank}. {display_name:<48} {bar} {rate:.1%}")
+    
+    # ========================================================================
+    # PRINT HEATMAP-STYLE SUMMARY
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("CONSISTENCY HEATMAP (Model x Image)")
+    print("="*80)
+    print("\nLegend: ██ >80% | ▓▓ 60-80% | ▒▒ 40-60% | ░░ 20-40% | ·· <20%")
+    print()
+    
+    # Header with image names (truncated)
+    header = f"{'Model':<35}"
+    for img_name in sorted(image_model_stats.keys()):
+        short_name = img_name[:8] if len(img_name) > 8 else img_name
+        header += f" {short_name:<10}"
+    print(header)
+    print("-" * len(header))
+    
+    # Rows for each model
+    for model_name in model_list:
+        row = f"{model_name[:33]:<35}"
+        for img_name in sorted(image_model_stats.keys()):
+            if img_name in image_model_stats and model_name in image_model_stats[img_name]:
+                rate = image_model_stats[img_name][model_name]['rate']
+                if rate >= 0.8:
+                    symbol = "██"
+                elif rate >= 0.6:
+                    symbol = "▓▓"
+                elif rate >= 0.4:
+                    symbol = "▒▒"
+                elif rate >= 0.2:
+                    symbol = "░░"
+                else:
+                    symbol = "··"
+                row += f" {symbol} {rate*100:>5.1f}% "
+            else:
+                row += f" {'N/A':^10}"
+        print(row)
+    
     print("\n" + "="*80)
     print(f"Results saved to: {output_file}")
     print("="*80 + "\n")
