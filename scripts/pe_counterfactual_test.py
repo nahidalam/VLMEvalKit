@@ -1,4 +1,5 @@
 import sys
+import os
 import os.path as osp
 from os.path import expanduser
 import torch
@@ -7,13 +8,191 @@ from vlmeval.dataset import SUPPORTED_DATASETS
 from vlmeval.config import *
 from vlmeval.smp import *
 import json
+from PIL import Image
+
+# Import for original LLaVA loading
+try:
+    from llava.model.builder import load_pretrained_model
+    from llava.mm_utils import get_model_name_from_path, process_images, tokenizer_image_token
+    from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+    from llava.conversation import conv_templates
+    LLAVA_AVAILABLE = True
+except ImportError:
+    print("Warning: LLaVA library not found. Install with: pip install git+https://github.com/haotian-liu/LLaVA.git")
+    LLAVA_AVAILABLE = False
 
 PTH = osp.realpath(__file__)
-IMAGE_PTH = expanduser('~/VLMEvalKit/assets/022.jpg')
+IMAGE_PTH = '/home/ubuntu/VLMEvalKit/assets/022.jpg'
+
+# Directory containing custom LLaVA models
+CUSTOM_MODELS_DIR = expanduser('/home/ubuntu/custom_llava_models')
 
 # Global PE mode control
 PE_MODE = 'normal'
 SHUFFLE_SEED = None
+
+
+# ============================================================================
+# CUSTOM MODEL LOADING (Using Original LLaVA Library)
+# ============================================================================
+
+class CustomLLaVAModel:
+    """Wrapper for loading and running custom local LLaVA models using the original LLaVA library."""
+    
+    def __init__(self, model_path, device='cuda'):
+        """
+        Initialize custom LLaVA model using the LLaVA library's load_pretrained_model.
+        """
+        if not LLAVA_AVAILABLE:
+            raise ImportError("LLaVA library required. Install with: pip install git+https://github.com/haotian-liu/LLaVA.git")
+        
+        self.model_path = model_path
+        self.model_name = os.path.basename(model_path)
+        self.device = device
+        
+        print(f"Loading custom model: {self.model_name}")
+        print(f"  Path: {model_path}")
+        
+        # Use LLaVA's native loading function
+        model_name = get_model_name_from_path(model_path)
+        print(f"  Model name detected: {model_name}")
+        
+        try:
+            self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+                model_path=model_path,
+                model_base=None,
+                model_name=model_name,
+                device_map="auto",
+                torch_dtype=torch.float16,
+            )
+            print(f"  ✓ Loaded successfully using LLaVA library")
+        except Exception as e:
+            print(f"  Failed to load with model_base=None: {e}")
+            try:
+                print(f"  Trying with base model: liuhaotian/llava-v1.5-7b")
+                self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+                    model_path=model_path,
+                    model_base="liuhaotian/llava-v1.5-7b",
+                    model_name=model_name,
+                    device_map="auto",
+                    torch_dtype=torch.float16,
+                )
+                print(f"  ✓ Loaded with base model")
+            except Exception as e2:
+                print(f"  Failed to load model: {e2}")
+                raise RuntimeError(f"Cannot load model from {model_path}: {e2}")
+        
+        self.model.eval()
+        
+        # Determine conversation template
+        if 'llama-2' in model_name.lower():
+            self.conv_mode = "llava_llama_2"
+        elif 'mistral' in model_name.lower():
+            self.conv_mode = "mistral_instruct"
+        elif 'v1.6' in model_name.lower() or 'v1.5' in model_name.lower():
+            self.conv_mode = "llava_v1"
+        else:
+            self.conv_mode = "llava_v1"
+        
+        print(f"  Using conversation mode: {self.conv_mode}")
+    
+    def generate(self, messages):
+        """Generate response for given messages."""
+        image_path = None
+        text_prompt = None
+        
+        for msg in messages:
+            if msg['type'] == 'image':
+                image_path = msg['value']
+            elif msg['type'] == 'text':
+                text_prompt = msg['value']
+        
+        if image_path is None or text_prompt is None:
+            return "Error: Missing image or text in messages"
+        
+        try:
+            image = Image.open(image_path).convert('RGB')
+            image_tensor = process_images([image], self.image_processor, self.model.config)
+            
+            if isinstance(image_tensor, list):
+                image_tensor = [img.to(self.model.device, dtype=torch.float16) for img in image_tensor]
+            else:
+                image_tensor = image_tensor.to(self.model.device, dtype=torch.float16)
+            
+            conv = conv_templates[self.conv_mode].copy()
+            
+            if self.model.config.mm_use_im_start_end:
+                question = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + text_prompt
+            else:
+                question = DEFAULT_IMAGE_TOKEN + '\n' + text_prompt
+            
+            conv.append_message(conv.roles[0], question)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+            
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+            input_ids = input_ids.unsqueeze(0).to(self.model.device)
+            
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    input_ids,
+                    images=image_tensor,
+                    image_sizes=[image.size],
+                    do_sample=False,
+                    max_new_tokens=256,
+                    use_cache=True,
+                )
+            
+            response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+            response = response.strip()
+            if conv.sep2 and conv.sep2 in response:
+                response = response.split(conv.sep2)[-1].strip()
+            
+            return response
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"Error generating response: {str(e)}"
+    
+    def get_vision_tower(self):
+        """Return the vision tower for hook injection."""
+        if hasattr(self.model, 'model') and hasattr(self.model.model, 'vision_tower'):
+            return self.model.model.vision_tower
+        elif hasattr(self.model, 'vision_tower'):
+            return self.model.vision_tower
+        return None
+
+
+# Cache for loaded custom models
+_custom_model_cache = {}
+
+def get_custom_model(model_name):
+    """Get or load a custom model by name."""
+    if model_name not in _custom_model_cache:
+        model_path = os.path.join(CUSTOM_MODELS_DIR, model_name)
+        if os.path.exists(model_path):
+            _custom_model_cache[model_name] = CustomLLaVAModel(model_path)
+        else:
+            raise FileNotFoundError(f"Custom model not found: {model_path}")
+    return _custom_model_cache[model_name]
+
+
+# List of custom model names
+CUSTOM_MODEL_NAMES = [
+    'llava-v1.5-7b-finetune-aimv2',
+    'llava-v1.5-7b-finetune-mrope-aimv2',
+    'llava-v1.5-7b-finetune-mrope-clip',
+    'llava-v1.5-7b-finetune-mrope-siglip-base-patch16-256',
+    'llava-v1.5-7b-finetune-mrope-siglip2-base-patch16-256',
+    'llava-v1.5-7b-finetune-siglip',
+    'llava-v1.5-7b-finetune-siglip2',
+]
+
+
+# ============================================================================
+# PE MODIFIER
+# ============================================================================
 
 class PEModifier:
     """Handles PE modification at different architectural levels"""
@@ -81,13 +260,23 @@ class PEModifier:
         return pre_hook_fn
 
 
-def find_and_hook_vision_encoder(model, pe_modifier):
+# ============================================================================
+# HOOK INJECTION
+# ============================================================================
+
+def find_and_hook_vision_encoder(model, pe_modifier, is_custom=False):
     """
     Comprehensive search for vision encoder and hook injection.
-    Tries multiple architectural patterns.
+    Works for both VLMEval models and custom LLaVA models.
     """
     hooks = []
     hooked_modules = []
+    
+    # For custom models, get the underlying model
+    if is_custom and hasattr(model, 'model'):
+        actual_model = model.model
+    else:
+        actual_model = model
     
     # Pattern 1: Direct model attributes
     vision_paths = [
@@ -104,29 +293,29 @@ def find_and_hook_vision_encoder(model, pe_modifier):
     for path in vision_paths:
         try:
             parts = path.split('.')
-            obj = model
+            obj = actual_model
             for part in parts:
                 obj = getattr(obj, part, None)
                 if obj is None:
                     break
             if obj is not None:
                 vision_encoder = obj
-                print(f"✓ Found vision encoder at: {path}")
+                print(f"  ✓ Found vision encoder at: {path}")
                 break
         except:
             continue
     
     if vision_encoder is None:
-        print("✗ Could not find vision encoder via standard paths")
+        print("  ✗ Could not find vision encoder via standard paths")
         # Try to find any module with 'vision' or 'visual' in name
-        for name, module in model.named_modules():
+        for name, module in actual_model.named_modules():
             if 'vision' in name.lower() or 'visual' in name.lower():
-                print(f"  Found potential vision module: {name}")
+                print(f"    Found potential vision module: {name}")
                 vision_encoder = module
                 break
     
     if vision_encoder is None:
-        print("✗ Warning: Could not locate vision encoder. PE modification will not work.")
+        print("  ✗ Warning: Could not locate vision encoder. PE modification will not work.")
         return hooks, hooked_modules
     
     # Hook injection strategies - try multiple layers
@@ -153,31 +342,46 @@ def find_and_hook_vision_encoder(model, pe_modifier):
             hook = module.register_forward_hook(pe_modifier.create_forward_hook())
             hooks.append(hook)
             hooked_modules.append(name)
-            print(f"✓ Registered hook on: {name} ({type(module).__name__})")
+            print(f"  ✓ Registered hook on: {name} ({type(module).__name__})")
         except Exception as e:
-            print(f"✗ Failed to hook {name}: {e}")
+            print(f"  ✗ Failed to hook {name}: {e}")
     
     if not hooks:
-        print("✗ Warning: No hooks were successfully registered")
+        print("  ✗ Warning: No hooks were successfully registered")
     
     return hooks, hooked_modules
 
 
-def CHECK_with_PE(val, msg, pe_mode='normal', seed=None):
-    """Run inference with specified PE mode"""
+# ============================================================================
+# INFERENCE WITH PE MODIFICATION
+# ============================================================================
+
+def CHECK_with_PE(model_name, msg, pe_mode='normal', seed=None):
+    """Run inference with specified PE mode - works for both VLMEval and custom models"""
     
-    if val not in supported_VLM:
-        return (val, "Model not found", pe_mode)
+    is_custom = model_name in CUSTOM_MODEL_NAMES
     
-    print(f"\n  Loading model: {val}")
-    model = supported_VLM[val]()
+    print(f"\n  Loading model: {model_name} ({'custom' if is_custom else 'vlmeval'})")
+    
+    try:
+        if is_custom:
+            model = get_custom_model(model_name)
+            actual_model = model.model if hasattr(model, 'model') else model
+        else:
+            if model_name not in supported_VLM:
+                return (model_name, "Model not found", pe_mode, [])
+            model = supported_VLM[model_name]()
+            actual_model = model
+    except Exception as e:
+        print(f"  ✗ Failed to load model: {e}")
+        return (model_name, f"Error loading model: {str(e)}", pe_mode, [])
     
     # Create PE modifier
     pe_modifier = PEModifier(mode=pe_mode, seed=seed)
     
     # Inject hooks
     print(f"  Injecting PE modification hooks (mode={pe_mode})...")
-    hooks, hooked_modules = find_and_hook_vision_encoder(model, pe_modifier)
+    hooks, hooked_modules = find_and_hook_vision_encoder(actual_model, pe_modifier, is_custom=is_custom)
     
     if not hooks:
         print(f"  ⚠ WARNING: No hooks injected - results may not reflect PE modifications!")
@@ -185,10 +389,12 @@ def CHECK_with_PE(val, msg, pe_mode='normal', seed=None):
     try:
         print(f"  Running inference...")
         res = model.generate(msg)
-        result = (val, res, pe_mode, hooked_modules)
+        result = (model_name, res, pe_mode, hooked_modules)
     except Exception as e:
         print(f"  ✗ Error during inference: {e}")
-        result = (val, f"Error: {str(e)}", pe_mode, hooked_modules)
+        import traceback
+        traceback.print_exc()
+        result = (model_name, f"Error: {str(e)}", pe_mode, hooked_modules)
     finally:
         # Clean up hooks
         for hook in hooks:
@@ -302,9 +508,13 @@ def compute_pe_sensitivity(results, ground_truth=None):
     else:
         metrics['shuffled_trial_consistency'] = 1.0
     
-    # Print detailed results
+    return metrics
+
+
+def print_pe_metrics(metrics, model_name):
+    """Print detailed PE sensitivity metrics."""
     print(f"\n{'='*70}")
-    print("PE SENSITIVITY METRICS:")
+    print(f"PE SENSITIVITY METRICS - {model_name}")
     print(f"{'='*70}")
     print(f"\nExact Match Scores:")
     print(f"  Normal vs Shuffled: {metrics['exact_match_shuffled']:.3f}")
@@ -316,26 +526,15 @@ def compute_pe_sensitivity(results, ground_truth=None):
     print(f"  ΔPE(Shuffled):  {metrics['delta_PE_shuffled']:.3f}")
     print(f"  ΔPE(Constant):  {metrics['delta_PE_constant']:.3f}")
     print(f"\nShuffled Trial Consistency: {metrics['shuffled_trial_consistency']:.3f}")
-    print(f"\nInterpretation:")
-    print(f"  ΔPE > 0.5:  Strong dependence on positional alignment")
-    print(f"  ΔPE 0.2-0.5: Moderate PE dependence")
-    print(f"  ΔPE < 0.2:  Robust spatial representations (PE-invariant)")
-    print(f"{'='*70}\n")
-    
-    # Detailed per-query breakdown
-    print(f"{'='*70}")
-    print("Per-Query Analysis:")
-    print(f"{'='*70}")
-    for idx in range(len(normal_outputs)):
-        print(f"\nQuery {idx+1}:")
-        print(f"  Normal:   {normal_outputs[idx][:80]}")
-        print(f"  Shuffled: {shuffled_first[idx][:80] if idx < len(shuffled_first) else 'N/A'}")
-        print(f"  Constant: {constant_outputs[idx][:80] if idx < len(constant_outputs) else 'N/A'}")
-    
-    return metrics
 
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 if __name__ == "__main__":
+    import gc
+    
     # Define spatial test queries
     spatial_queries = [
         [
@@ -349,16 +548,51 @@ if __name__ == "__main__":
         [
             dict(type='image', value=IMAGE_PTH),
             dict(type='text', value="Describe the spatial arrangement of objects.")
-        ]
+        ],
+        [
+            dict(type='image', value=IMAGE_PTH),
+            dict(type='text', value="Is the bowl to the left or right of center?")
+        ],
+        [
+            dict(type='image', value=IMAGE_PTH),
+            dict(type='text', value="What is at the bottom of the image?")
+        ],
     ]
     
-    # Models to test
-    model_list = [
-        "llava_v1.5_7b",
-        # Add more models as needed
+    # ========================================================================
+    # MODELS TO TEST
+    # ========================================================================
+    
+    # VLMEval models
+    vlmeval_models = ["llava_v1.5_7b"]
+    
+    # Custom local models
+    custom_models = [
+        'llava-v1.5-7b-finetune-aimv2',
+        'llava-v1.5-7b-finetune-mrope-aimv2',
+        'llava-v1.5-7b-finetune-mrope-clip',
+        'llava-v1.5-7b-finetune-mrope-siglip-base-patch16-256',
+        'llava-v1.5-7b-finetune-mrope-siglip2-base-patch16-256',
+        'llava-v1.5-7b-finetune-siglip',
+        'llava-v1.5-7b-finetune-siglip2',
     ]
     
-    # Run experiment
+    # Combine all models
+    model_list = vlmeval_models + custom_models
+    
+    print("\n" + "="*80)
+    print("PE COUNTERFACTUAL TEST - COMPREHENSIVE EVALUATION")
+    print("="*80)
+    print(f"\nConfiguration:")
+    print(f"  Models: {len(model_list)} ({len(vlmeval_models)} VLMEval + {len(custom_models)} custom)")
+    print(f"  Queries: {len(spatial_queries)}")
+    print(f"  PE Modes: normal, shuffled, constant")
+    print(f"  Trials per shuffled: 3")
+    print(f"\nCustom models directory: {CUSTOM_MODELS_DIR}")
+    print(f"Test image: {IMAGE_PTH}")
+    print("="*80)
+    
+    # Run experiments
     all_results = {}
     all_metrics = {}
     
@@ -367,50 +601,152 @@ if __name__ == "__main__":
         print(f"# Testing Model: {model_name}")
         print(f"{'#'*70}")
         
-        results = run_pe_experiment(
-            model_name, 
-            spatial_queries,
-            pe_modes=['normal', 'shuffled', 'constant'],
-            num_trials=3
-        )
+        try:
+            results = run_pe_experiment(
+                model_name, 
+                spatial_queries,
+                pe_modes=['normal', 'shuffled', 'constant'],
+                num_trials=3
+            )
+            
+            metrics = compute_pe_sensitivity(results)
+            print_pe_metrics(metrics, model_name)
+            
+            all_results[model_name] = results
+            all_metrics[model_name] = metrics
+            
+        except Exception as e:
+            print(f"✗ Error testing {model_name}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            all_metrics[model_name] = {
+                'error': str(e),
+                'delta_PE_shuffled': -1,
+                'delta_PE_constant': -1,
+            }
         
-        metrics = compute_pe_sensitivity(results)
+        # Clear model cache and GPU memory between models
+        if model_name in _custom_model_cache:
+            del _custom_model_cache[model_name]
         
-        all_results[model_name] = results
-        all_metrics[model_name] = metrics
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
     
-    # Save results
-    output_file = 'pe_counterfactual_results.json'
+    # ========================================================================
+    # SAVE RESULTS
+    # ========================================================================
+    
+    output_file = '/home/ubuntu/VLMEvalKit/pe_counterfactual_results.json'
+    
+    # Prepare serializable results
+    serializable_results = {}
+    for model, model_results in all_results.items():
+        serializable_results[model] = {
+            mode: [[r[1] for r in trial] for trial in trials]
+            for mode, trials in model_results.items()
+        }
+    
     with open(output_file, 'w') as f:
         json.dump({
             'metrics': all_metrics,
-            'outputs': {
-                model: {
-                    mode: [[r[1] for r in trial] for trial in trials]
-                    for mode, trials in model_results.items()
-                }
-                for model, model_results in all_results.items()
-            }
+            'outputs': serializable_results
         }, f, indent=2)
     
     print(f"\n✓ Results saved to: {output_file}")
     
-    # Summary table
-    print(f"\n{'='*70}")
-    print("SUMMARY - Cross-Model Comparison:")
-    print(f"{'='*70}")
-    print(f"{'Model':<30} {'ΔPE(Shuf)':<12} {'ΔPE(Const)':<12} {'Interpretation'}")
-    print(f"{'-'*70}")
-    for model, metrics in all_metrics.items():
-        delta_s = metrics['delta_PE_shuffled']
-        delta_c = metrics['delta_PE_constant']
+    # ========================================================================
+    # SUMMARY TABLE
+    # ========================================================================
+    
+    print(f"\n{'='*80}")
+    print("SUMMARY - Cross-Model PE Sensitivity Comparison")
+    print(f"{'='*80}")
+    print(f"\n{'Model':<55} {'ΔPE(Shuf)':<12} {'ΔPE(Const)':<12} {'Interpretation'}")
+    print(f"{'-'*90}")
+    
+    for model_name in model_list:
+        metrics = all_metrics.get(model_name, {})
         
-        if delta_s > 0.5 or delta_c > 0.5:
+        if 'error' in metrics:
+            print(f"{model_name:<55} {'ERROR':<12} {'ERROR':<12} {metrics.get('error', 'Unknown')[:20]}")
+            continue
+        
+        delta_s = metrics.get('delta_PE_shuffled', -1)
+        delta_c = metrics.get('delta_PE_constant', -1)
+        
+        if delta_s < 0 or delta_c < 0:
+            interp = "No data"
+        elif delta_s > 0.5 or delta_c > 0.5:
             interp = "Alignment-dependent"
         elif delta_s < 0.2 and delta_c < 0.2:
             interp = "Robust (PE-invariant)"
         else:
             interp = "Mixed"
         
-        print(f"{model:<30} {delta_s:<12.3f} {delta_c:<12.3f} {interp}")
-    print(f"{'='*70}\n")
+        print(f"{model_name:<55} {delta_s:<12.3f} {delta_c:<12.3f} {interp}")
+    
+    # ========================================================================
+    # DETAILED COMPARISON TABLE
+    # ========================================================================
+    
+    print(f"\n{'='*80}")
+    print("DETAILED METRICS TABLE")
+    print(f"{'='*80}")
+    print(f"\n{'Model':<40} {'ExactShuf':<10} {'ExactConst':<10} {'TokShuf':<10} {'TokConst':<10} {'TrialCons':<10}")
+    print(f"{'-'*100}")
+    
+    for model_name in model_list:
+        metrics = all_metrics.get(model_name, {})
+        
+        if 'error' in metrics:
+            print(f"{model_name[:38]:<40} {'ERR':<10} {'ERR':<10} {'ERR':<10} {'ERR':<10} {'ERR':<10}")
+            continue
+        
+        em_s = metrics.get('exact_match_shuffled', 0)
+        em_c = metrics.get('exact_match_constant', 0)
+        to_s = metrics.get('token_overlap_shuffled', 0)
+        to_c = metrics.get('token_overlap_constant', 0)
+        tc = metrics.get('shuffled_trial_consistency', 0)
+        
+        print(f"{model_name[:38]:<40} {em_s:<10.3f} {em_c:<10.3f} {to_s:<10.3f} {to_c:<10.3f} {tc:<10.3f}")
+    
+    # ========================================================================
+    # RANKING BY PE ROBUSTNESS
+    # ========================================================================
+    
+    print(f"\n{'='*80}")
+    print("MODEL RANKING BY PE ROBUSTNESS (lower ΔPE = more robust)")
+    print(f"{'='*80}")
+    
+    # Calculate average ΔPE for ranking
+    model_avg_delta = []
+    for model_name in model_list:
+        metrics = all_metrics.get(model_name, {})
+        if 'error' not in metrics:
+            avg_delta = (metrics.get('delta_PE_shuffled', 1) + metrics.get('delta_PE_constant', 1)) / 2
+            model_avg_delta.append((model_name, avg_delta, metrics))
+    
+    # Sort by average ΔPE (lower is better)
+    model_avg_delta.sort(key=lambda x: x[1])
+    
+    print(f"\n{'Rank':<6} {'Model':<50} {'Avg ΔPE':<12} {'Status'}")
+    print(f"{'-'*80}")
+    
+    for rank, (model_name, avg_delta, metrics) in enumerate(model_avg_delta, 1):
+        if avg_delta < 0.2:
+            status = "🟢 Robust"
+        elif avg_delta < 0.4:
+            status = "🟡 Moderate"
+        else:
+            status = "🔴 Sensitive"
+        
+        bar = "█" * int((1 - avg_delta) * 15) + "░" * (15 - int((1 - avg_delta) * 15))
+        print(f"{rank:<6} {model_name[:48]:<50} {avg_delta:<12.3f} {bar} {status}")
+    
+    print(f"\n{'='*80}")
+    print(f"Results saved to: {output_file}")
+    print("="*80 + "\n")
+
+
