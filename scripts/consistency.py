@@ -830,6 +830,143 @@ if __name__ == "__main__":
         print(f"{t:<15} {stats['consistent']:<12} {stats['inconsistent']:<12} {rate:.2%}")
     
     # ========================================================================
+    # PRINT PER-MODEL PER-TRANSFORM BREAKDOWN
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("CONSISTENCY BY MODEL AND TRANSFORMATION")
+    print("="*80)
+    
+    # Build per-model per-transform stats
+    model_transform_stats = {}  # {model: {transform: {consistent, inconsistent}}}
+    
+    for result in all_results:
+        model_name = result['model']
+        if model_name not in model_transform_stats:
+            model_transform_stats[model_name] = {t: {'consistent': 0, 'inconsistent': 0} for t in transforms if t != 'original'}
+        
+        if 'image_results' not in result:
+            continue
+        
+        for img_result in result['image_results']:
+            if 'questions' not in img_result:
+                continue
+            for q_result in img_result['questions']:
+                for t, cons in q_result.get('consistency', {}).items():
+                    if t not in model_transform_stats[model_name]:
+                        model_transform_stats[model_name][t] = {'consistent': 0, 'inconsistent': 0}
+                    if cons['status'] == 'consistent':
+                        model_transform_stats[model_name][t]['consistent'] += 1
+                    elif cons['status'] == 'inconsistent':
+                        model_transform_stats[model_name][t]['inconsistent'] += 1
+    
+    # Print header
+    transform_list = [t for t in transforms if t != 'original']
+    header = f"{'Model':<40}"
+    for t in transform_list:
+        header += f" {t:<12}"
+    header += f" {'OVERALL':<12}"
+    print(header)
+    print("-" * len(header))
+    
+    # Print each model's per-transform stats
+    for model_name in model_list:
+        if model_name not in model_transform_stats:
+            continue
+        
+        row = f"{model_name[:38]:<40}"
+        total_consistent = 0
+        total_checks = 0
+        
+        for t in transform_list:
+            stats = model_transform_stats[model_name].get(t, {'consistent': 0, 'inconsistent': 0})
+            total = stats['consistent'] + stats['inconsistent']
+            rate = stats['consistent'] / total if total > 0 else 0
+            row += f" {rate*100:>5.1f}%      "
+            total_consistent += stats['consistent']
+            total_checks += total
+        
+        # Overall rate for this model
+        overall_rate = total_consistent / total_checks if total_checks > 0 else 0
+        row += f" {overall_rate*100:>5.1f}%"
+        print(row)
+    
+    # ========================================================================
+    # PRINT PER-MODEL PER-TRANSFORM DETAILED TABLE
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("DETAILED MODEL x TRANSFORM MATRIX (with counts)")
+    print("="*80)
+    
+    for model_name in model_list:
+        if model_name not in model_transform_stats:
+            continue
+        
+        print(f"\n🤖 {model_name}")
+        print("-" * 70)
+        print(f"  {'Transform':<15} {'Consistent':<12} {'Inconsistent':<12} {'Rate':<12} {'Bar':<20}")
+        print("  " + "-" * 66)
+        
+        model_total_consistent = 0
+        model_total_checks = 0
+        
+        for t in transform_list:
+            stats = model_transform_stats[model_name].get(t, {'consistent': 0, 'inconsistent': 0})
+            total = stats['consistent'] + stats['inconsistent']
+            rate = stats['consistent'] / total if total > 0 else 0
+            bar = "█" * int(rate * 15) + "░" * (15 - int(rate * 15))
+            print(f"  {t:<15} {stats['consistent']:<12} {stats['inconsistent']:<12} {rate:.2%}        {bar}")
+            
+            model_total_consistent += stats['consistent']
+            model_total_checks += total
+        
+        # Model summary
+        overall_rate = model_total_consistent / model_total_checks if model_total_checks > 0 else 0
+        print("  " + "-" * 66)
+        print(f"  {'TOTAL':<15} {model_total_consistent:<12} {model_total_checks - model_total_consistent:<12} {overall_rate:.2%}")
+    
+    # ========================================================================
+    # PRINT TRANSFORM HEATMAP (Model x Transform)
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("TRANSFORM CONSISTENCY HEATMAP (Model x Transform)")
+    print("="*80)
+    print("\nLegend: ██ >80% | ▓▓ 60-80% | ▒▒ 40-60% | ░░ 20-40% | ·· <20%")
+    print()
+    
+    # Header
+    header = f"{'Model':<42}"
+    for t in transform_list:
+        header += f" {t:<10}"
+    print(header)
+    print("-" * len(header))
+    
+    for model_name in model_list:
+        if model_name not in model_transform_stats:
+            continue
+        
+        row = f"{model_name[:40]:<42}"
+        for t in transform_list:
+            stats = model_transform_stats[model_name].get(t, {'consistent': 0, 'inconsistent': 0})
+            total = stats['consistent'] + stats['inconsistent']
+            rate = stats['consistent'] / total if total > 0 else 0
+            
+            if rate >= 0.8:
+                symbol = "██"
+            elif rate >= 0.6:
+                symbol = "▓▓"
+            elif rate >= 0.4:
+                symbol = "▒▒"
+            elif rate >= 0.2:
+                symbol = "░░"
+            else:
+                symbol = "··"
+            row += f" {symbol}{rate*100:>5.1f}%  "
+        print(row)
+    
+    # ========================================================================
     # PRINT DETAILED PER-IMAGE BREAKDOWN
     # ========================================================================
     
