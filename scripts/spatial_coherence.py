@@ -3,6 +3,8 @@ Spatial Coherence Analysis for Vision Encoders
 
 Quantifies how well vision encoders preserve spatial locality by comparing
 similarity of nearby vs distant patch features.
+
+Updated to include SigLIP and SigLIP2 256x256 resolution models.
 """
 
 import torch
@@ -233,30 +235,32 @@ class AIMv2Encoder(EncoderWrapper):
                 pixel_values=inputs.pixel_values,
                 output_hidden_states=True
             )
-            # Get hidden state
+            # Get the last hidden state
             if hasattr(outputs, 'last_hidden_state'):
                 hidden_state = outputs.last_hidden_state
             else:
+                # Try accessing hidden_states
                 hidden_state = outputs.hidden_states[-1]
             
-            # Check if there's a CLS token
             num_tokens = hidden_state.shape[1]
+            
+            # Check for CLS token
             num_patches_with_cls = num_tokens - 1
             grid_with_cls = int(np.sqrt(num_patches_with_cls))
             grid_no_cls = int(np.sqrt(num_tokens))
             
-            if grid_no_cls * grid_no_cls == num_tokens:
-                # No CLS token
-                patch_features = hidden_state
-                self.grid_size = grid_no_cls
-            elif grid_with_cls * grid_with_cls == num_patches_with_cls:
+            if grid_with_cls * grid_with_cls == num_patches_with_cls:
                 # Has CLS token
                 patch_features = hidden_state[:, 1:, :]
                 self.grid_size = grid_with_cls
-            else:
-                # Assume no CLS token
+            elif grid_no_cls * grid_no_cls == num_tokens:
+                # No CLS token
                 patch_features = hidden_state
                 self.grid_size = grid_no_cls
+            else:
+                # Fallback: assume CLS token
+                patch_features = hidden_state[:, 1:, :]
+                self.grid_size = grid_with_cls
         
         features = patch_features[0].cpu().numpy()
         return features
@@ -272,67 +276,40 @@ class AIMv2Encoder(EncoderWrapper):
 # SPATIAL COHERENCE COMPUTATION
 # ============================================================================
 
-def get_patch_coordinates(idx: int, H: int, W: int) -> Tuple[int, int]:
-    """Convert flat patch index to 2D coordinates."""
-    i = idx // W
-    j = idx % W
-    return (i, j)
+def cosine_similarity_np(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two vectors."""
+    return 1 - cosine(a, b)
 
 
-def chebyshev_distance(coord1: Tuple[int, int], coord2: Tuple[int, int]) -> int:
-    """Compute Chebyshev distance (L-infinity) between two coordinates."""
-    return max(abs(coord1[0] - coord2[0]), abs(coord1[1] - coord2[1]))
-
-
-def compute_local_neighbors(idx: int, H: int, W: int, max_dist: int = 1) -> List[int]:
-    """Get indices of local neighbors within Chebyshev distance."""
-    i, j = get_patch_coordinates(idx, H, W)
-    neighbors = []
+def get_neighbors(patch_idx: int, H: int, W: int) -> List[int]:
+    """Get indices of 8-connected neighbors for a patch."""
+    row = patch_idx // W
+    col = patch_idx % W
     
-    for di in range(-max_dist, max_dist + 1):
-        for dj in range(-max_dist, max_dist + 1):
-            if di == 0 and dj == 0:
-                continue  # Skip self
-            
-            ni, nj = i + di, j + dj
-            if 0 <= ni < H and 0 <= nj < W:
-                neighbor_idx = ni * W + nj
-                neighbors.append(neighbor_idx)
+    neighbors = []
+    for dr in [-1, 0, 1]:
+        for dc in [-1, 0, 1]:
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < H and 0 <= nc < W:
+                neighbors.append(nr * W + nc)
     
     return neighbors
 
 
-def compute_distant_patches(idx: int, H: int, W: int, min_dist: int = None) -> List[int]:
-    """Get indices of distant patches."""
-    if min_dist is None:
-        min_dist = min(H, W) // 2
+def compute_distant_patches(patch_idx: int, H: int, W: int, min_distance: int = 5) -> List[int]:
+    """Get indices of distant patches (at least min_distance away in grid)."""
+    row = patch_idx // W
+    col = patch_idx % W
     
-    i, j = get_patch_coordinates(idx, H, W)
     distant = []
-    
-    for other_idx in range(H * W):
-        if other_idx == idx:
-            continue
-        
-        other_i, other_j = get_patch_coordinates(other_idx, H, W)
-        dist = chebyshev_distance((i, j), (other_i, other_j))
-        
-        if dist >= min_dist:
-            distant.append(other_idx)
+    for r in range(H):
+        for c in range(W):
+            if abs(r - row) >= min_distance or abs(c - col) >= min_distance:
+                distant.append(r * W + c)
     
     return distant
-
-
-def cosine_similarity_np(vec1: np.ndarray, vec2: np.ndarray) -> float:
-    """Compute cosine similarity between two vectors."""
-    dot_product = np.dot(vec1, vec2)
-    norm1 = np.linalg.norm(vec1)
-    norm2 = np.linalg.norm(vec2)
-    
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    
-    return dot_product / (norm1 * norm2)
 
 
 def compute_spatial_coherence(patch_features: np.ndarray, H: int, W: int) -> Dict:
@@ -340,25 +317,32 @@ def compute_spatial_coherence(patch_features: np.ndarray, H: int, W: int) -> Dic
     Compute spatial coherence metrics for patch features.
     
     Args:
-        patch_features: [H*W, D] array of patch features
-        H, W: spatial dimensions
+        patch_features: [N, D] array of patch features
+        H, W: Spatial dimensions of patch grid
     
     Returns:
-        Dictionary with local_sim, distant_sim, and SCR
+        Dictionary with coherence metrics
     """
-    num_patches = H * W
-    assert patch_features.shape[0] == num_patches, \
-        f"Expected {num_patches} patches, got {patch_features.shape[0]}"
+    num_patches = patch_features.shape[0]
+    expected_patches = H * W
+    
+    if num_patches != expected_patches:
+        print(f"  Warning: Expected {expected_patches} patches, got {num_patches}")
+        # Adjust grid size
+        actual_grid = int(np.sqrt(num_patches))
+        if actual_grid * actual_grid == num_patches:
+            H = W = actual_grid
+        else:
+            raise ValueError(f"Cannot determine grid size for {num_patches} patches")
     
     local_sims = []
     distant_sims = []
     
-    # Compute for each patch
     for patch_idx in range(num_patches):
         patch_vec = patch_features[patch_idx]
         
         # Get local neighbors
-        local_neighbors = compute_local_neighbors(patch_idx, H, W, max_dist=1)
+        local_neighbors = get_neighbors(patch_idx, H, W)
         if local_neighbors:
             local_sim = np.mean([
                 cosine_similarity_np(patch_vec, patch_features[n])
@@ -517,22 +501,34 @@ def main():
     DEBUG = True  # Set to True to see detailed errors
     
     # Define encoders to test
+    # Updated to include SigLIP and SigLIP2 256x256 resolution models
     encoders_config = [
+        # CLIP
         ('CLIP-ViT-B/16', lambda: CLIPEncoder("openai/clip-vit-base-patch16", device)),
-        ('SigLIP-Base', lambda: SigLIPEncoder("google/siglip-base-patch16-224", device)),
-        ('SigLIP2-Base', lambda: SigLIPEncoder("google/siglip2-base-patch16-224", device)),
+        
+        # SigLIP - 224 and 256 resolutions
+        ('SigLIP-Base-224', lambda: SigLIPEncoder("google/siglip-base-patch16-224", device)),
+        ('SigLIP-Base-256', lambda: SigLIPEncoder("google/siglip-base-patch16-256", device)),
+        
+        # SigLIP2 - 224 and 256 resolutions
+        ('SigLIP2-Base-224', lambda: SigLIPEncoder("google/siglip2-base-patch16-224", device)),
+        ('SigLIP2-Base-256', lambda: SigLIPEncoder("google/siglip2-base-patch16-256", device)),
+        
+        # DINOv2
         ('DINOv2-Base', lambda: DINOv2Encoder("facebook/dinov2-base", device)),
+        
+        # AIMv2
         ('AIMv2-Large', lambda: AIMv2Encoder("apple/aimv2-large-patch14-224", device)),
     ]
     
     # Get test images
     # You can modify this to use your own image directory
-    image_dir = expanduser('~/VLMEvalKit/assets')
+    image_dir = '/home/ubuntu/VLMEvalKit/assets'
     
     # For demo, just use the test image
     # In practice, you'd want a diverse set of images
     test_images = [
-        expanduser('~/VLMEvalKit/assets/022.jpg'),
+        '/home/ubuntu/VLMEvalKit/assets/022.jpg',
     ]
     
     # You can add more images from a directory:
@@ -574,20 +570,27 @@ def main():
             continue
     
     # Save results
-    output_file = expanduser('~/VLMEvalKit/spatial_coherence_results.json')
+    output_file = '/home/ubuntu/VLMEvalKit/spatial_coherence_results.json'
     with open(output_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     
     print(f"\n{'='*80}")
     print("SUMMARY TABLE")
     print(f"{'='*80}")
-    print(f"{'Encoder':<30} {'Local Sim':<12} {'Distant Sim':<12} {'SCR':<10}")
+    print(f"{'Encoder':<25} {'Resolution':<12} {'Local Sim':<12} {'Distant Sim':<12} {'SCR':<10}")
     print("-" * 80)
     
     for result in all_results:
-        encoder_name = result['encoder'].split('/')[-1][:28]
+        encoder_name = result['encoder'].split('/')[-1]
         agg = result['aggregated']
-        print(f"{encoder_name:<30} {agg['mean_local_sim']:>11.4f} {agg['mean_distant_sim']:>11.4f} {agg['mean_scr']:>9.4f}")
+        # Extract resolution from encoder name if present
+        if '224' in encoder_name:
+            resolution = '224x224'
+        elif '256' in encoder_name:
+            resolution = '256x256'
+        else:
+            resolution = agg.get('spatial_dims', 'N/A')
+        print(f"{encoder_name:<25} {resolution:<12} {agg['mean_local_sim']:>11.4f} {agg['mean_distant_sim']:>11.4f} {agg['mean_scr']:>9.4f}")
     
     print(f"\n{'='*80}")
     print(f"Results saved to: {output_file}")
@@ -596,3 +599,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
