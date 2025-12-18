@@ -11,33 +11,42 @@ import re
 from collections import defaultdict
 import json
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoProcessor
-from transformers import LlavaForConditionalGeneration, LlavaProcessor
+
+# Import for original LLaVA loading
+try:
+    from llava.model.builder import load_pretrained_model
+    from llava.mm_utils import get_model_name_from_path, process_images, tokenizer_image_token
+    from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+    from llava.conversation import conv_templates
+    LLAVA_AVAILABLE = True
+except ImportError:
+    print("Warning: LLaVA library not found. Install with: pip install llava")
+    LLAVA_AVAILABLE = False
 
 PTH = osp.realpath(__file__)
 IMAGE_PTH = '/home/ubuntu/VLMEvalKit/assets/022.jpg'
 
 # Directory containing custom LLaVA models
-CUSTOM_MODELS_DIR = expanduser('~/custom_llava_models')
-
-# Base LLaVA model to load processor from (since fine-tuned models don't have processor files)
-BASE_LLAVA_MODEL = "llava-hf/llava-1.5-7b-hf"
+CUSTOM_MODELS_DIR = expanduser('/home/ubuntu/custom_llava_models')
 
 # ============================================================================
-# CUSTOM MODEL LOADING
+# CUSTOM MODEL LOADING (Using Original LLaVA Library)
 # ============================================================================
 
 class CustomLLaVAModel:
-    """Wrapper for loading and running custom local LLaVA models."""
+    """Wrapper for loading and running custom local LLaVA models using the original LLaVA library."""
     
     def __init__(self, model_path, device='cuda'):
         """
-        Initialize custom LLaVA model.
+        Initialize custom LLaVA model using the LLaVA library's load_pretrained_model.
         
         Args:
             model_path: Path to the model directory
             device: Device to run on ('cuda' or 'cpu')
         """
+        if not LLAVA_AVAILABLE:
+            raise ImportError("LLaVA library required. Install with: pip install llava")
+        
         self.model_path = model_path
         self.model_name = os.path.basename(model_path)
         self.device = device
@@ -45,47 +54,50 @@ class CustomLLaVAModel:
         print(f"Loading custom model: {self.model_name}")
         print(f"  Path: {model_path}")
         
-        # Load processor from base LLaVA model (fine-tuned models don't have processor files)
-        print(f"  Loading processor from base model: {BASE_LLAVA_MODEL}")
-        try:
-            self.processor = LlavaProcessor.from_pretrained(BASE_LLAVA_MODEL)
-        except Exception as e:
-            print(f"  Failed to load processor from {BASE_LLAVA_MODEL}: {e}")
-            # Try alternative base model
-            alt_base = "llava-hf/llava-v1.6-mistral-7b-hf"
-            print(f"  Trying alternative: {alt_base}")
-            self.processor = LlavaProcessor.from_pretrained(alt_base)
+        # Use LLaVA's native loading function
+        # This properly handles the model architecture and config
+        model_name = get_model_name_from_path(model_path)
+        print(f"  Model name detected: {model_name}")
         
-        # Load model weights from local checkpoint
-        print(f"  Loading model weights from: {model_path}")
         try:
-            self.model = LlavaForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16,
+            self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+                model_path=model_path,
+                model_base=None,  # For full fine-tuned models
+                model_name=model_name,
                 device_map="auto",
-                low_cpu_mem_usage=True
+                torch_dtype=torch.float16,
             )
-            self.model_type = 'llava'
-            print(f"  ✓ Loaded successfully as LLaVA model")
+            print(f"  ✓ Loaded successfully using LLaVA library")
         except Exception as e:
-            print(f"  Failed to load as LLaVA: {e}")
-            # Try loading with AutoModelForCausalLM
+            print(f"  Failed to load with model_base=None: {e}")
+            # Try loading with base model (for LoRA fine-tuned models)
             try:
-                print(f"  Trying AutoModelForCausalLM...")
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    torch_dtype=torch.float16,
+                print(f"  Trying with base model: liuhaotian/llava-v1.5-7b")
+                self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+                    model_path=model_path,
+                    model_base="liuhaotian/llava-v1.5-7b",
+                    model_name=model_name,
                     device_map="auto",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
+                    torch_dtype=torch.float16,
                 )
-                self.model_type = 'auto'
-                print(f"  ✓ Loaded as AutoModelForCausalLM")
+                print(f"  ✓ Loaded with base model")
             except Exception as e2:
                 print(f"  Failed to load model: {e2}")
-                raise RuntimeError(f"Cannot load model from {model_path}")
+                raise RuntimeError(f"Cannot load model from {model_path}: {e2}")
         
         self.model.eval()
+        
+        # Determine conversation template
+        if 'llama-2' in model_name.lower():
+            self.conv_mode = "llava_llama_2"
+        elif 'mistral' in model_name.lower():
+            self.conv_mode = "mistral_instruct"
+        elif 'v1.6' in model_name.lower() or 'v1.5' in model_name.lower():
+            self.conv_mode = "llava_v1"
+        else:
+            self.conv_mode = "llava_v1"
+        
+        print(f"  Using conversation mode: {self.conv_mode}")
     
     def generate(self, messages):
         """
@@ -113,44 +125,56 @@ class CustomLLaVAModel:
             return "Error: Missing image or text in messages"
         
         try:
-            # Load image
+            # Load and process image
             image = Image.open(image_path).convert('RGB')
+            image_tensor = process_images([image], self.image_processor, self.model.config)
             
-            if self.model_type == 'llava':
-                # Format for LLaVA
-                prompt = f"USER: <image>\n{text_prompt}\nASSISTANT:"
-                inputs = self.processor(text=prompt, images=image, return_tensors="pt")
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-                
-                with torch.no_grad():
-                    output_ids = self.model.generate(
-                        **inputs,
-                        max_new_tokens=256,
-                        do_sample=False,
-                        pad_token_id=self.processor.tokenizer.pad_token_id
-                    )
-                
-                # Decode only the new tokens
-                input_len = inputs['input_ids'].shape[1]
-                response = self.processor.decode(output_ids[0][input_len:], skip_special_tokens=True)
-                
+            if isinstance(image_tensor, list):
+                image_tensor = [img.to(self.model.device, dtype=torch.float16) for img in image_tensor]
             else:
-                # Generic approach for AutoModel
-                inputs = self.processor(text=text_prompt, images=image, return_tensors="pt")
-                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-                
-                with torch.no_grad():
-                    output_ids = self.model.generate(
-                        **inputs,
-                        max_new_tokens=256,
-                        do_sample=False
-                    )
-                
-                response = self.processor.decode(output_ids[0], skip_special_tokens=True)
+                image_tensor = image_tensor.to(self.model.device, dtype=torch.float16)
             
-            return response.strip()
+            # Build conversation
+            conv = conv_templates[self.conv_mode].copy()
+            
+            # Add image token to the question
+            if self.model.config.mm_use_im_start_end:
+                question = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + text_prompt
+            else:
+                question = DEFAULT_IMAGE_TOKEN + '\n' + text_prompt
+            
+            conv.append_message(conv.roles[0], question)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+            
+            # Tokenize
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+            input_ids = input_ids.unsqueeze(0).to(self.model.device)
+            
+            # Generate
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    input_ids,
+                    images=image_tensor,
+                    image_sizes=[image.size],
+                    do_sample=False,
+                    max_new_tokens=256,
+                    use_cache=True,
+                )
+            
+            # Decode response
+            response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+            
+            # Extract only the assistant's response
+            response = response.strip()
+            if conv.sep2 and conv.sep2 in response:
+                response = response.split(conv.sep2)[-1].strip()
+            
+            return response
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"Error generating response: {str(e)}"
 
 
@@ -216,7 +240,7 @@ def apply_transformation(image_path, transform_type):
     
     Args:
         image_path: Path to original image
-        transform_type: One of ['original', 'hflip', 'rotate90', 'rotate180', 'rotate270']
+        transform_type: One of ['original', 'hflip', 'vflip', 'rotate90', 'rotate180', 'rotate270']
     
     Returns:
         Path to transformed image
@@ -227,6 +251,8 @@ def apply_transformation(image_path, transform_type):
         return image_path
     elif transform_type == 'hflip':
         img_transformed = img.transpose(Image.FLIP_LEFT_RIGHT)
+    elif transform_type == 'vflip':
+        img_transformed = img.transpose(Image.FLIP_TOP_BOTTOM)
     elif transform_type == 'rotate90':
         img_transformed = img.rotate(90, expand=True)
     elif transform_type == 'rotate180':
@@ -236,8 +262,11 @@ def apply_transformation(image_path, transform_type):
     else:
         raise ValueError(f"Unknown transform: {transform_type}")
     
-    # Save to temp file
-    temp_path = image_path.replace('.jpg', f'_{transform_type}.jpg')
+    # Save to temp file with unique name based on original image
+    base_name = os.path.basename(image_path)
+    base_dir = os.path.dirname(image_path)
+    name, ext = os.path.splitext(base_name)
+    temp_path = os.path.join(base_dir, f'{name}_{transform_type}{ext}')
     img_transformed.save(temp_path)
     return temp_path
 
@@ -304,23 +333,31 @@ def normalize_answer(raw_answer, question_type='spatial'):
 class SpatialQuestion:
     """Defines a spatial question with expected answer transformations."""
     
-    def __init__(self, text, question_type='spatial', expected_flip_behavior='opposite'):
+    def __init__(self, text, question_type='spatial', spatial_axis='horizontal'):
         """
         Args:
             text: Question text
             question_type: Type for normalization
-            expected_flip_behavior: How answer should change with horizontal flip
-                - 'opposite': left<->right swap (e.g., "Is X to the left of Y?")
-                - 'same': answer should not change (e.g., "Is X above Y?")
-                - 'custom': use custom logic
+            spatial_axis: Which axis the question is about
+                - 'horizontal': left/right questions
+                - 'vertical': above/below questions
+                - 'count': counting questions (answer should stay same)
+                - 'yesno': yes/no questions about spatial relations
         """
         self.text = text
         self.question_type = question_type
-        self.expected_flip_behavior = expected_flip_behavior
+        self.spatial_axis = spatial_axis
     
     def get_expected_answer(self, original_answer, transform_type):
         """
         Get expected answer after transformation.
+        
+        Transformation effects on spatial relations:
+        - hflip: swaps left<->right, keeps above/below same
+        - vflip: swaps above<->below, keeps left/right same
+        - rotate90: left->above, right->below, above->right, below->left
+        - rotate180: left<->right, above<->below
+        - rotate270: left->below, right->above, above->left, below->right
         
         Args:
             original_answer: Normalized answer from original image
@@ -332,20 +369,60 @@ class SpatialQuestion:
         if transform_type == 'original':
             return original_answer
         
-        if transform_type == 'hflip':
-            if self.expected_flip_behavior == 'opposite':
-                # Swap left/right
-                if original_answer == 'left':
-                    return 'right'
-                elif original_answer == 'right':
-                    return 'left'
-            elif self.expected_flip_behavior == 'same':
-                return original_answer
+        # For yes/no answers (1/0), determine based on axis and transform
+        if original_answer in [0, 1]:
+            return self._get_expected_yesno(original_answer, transform_type)
         
-        # For rotations, logic depends on question
-        # Can be extended later
+        # For directional answers
+        if original_answer in ['left', 'right', 'above', 'below']:
+            return self._get_expected_direction(original_answer, transform_type)
+        
+        # For count questions, answer should stay the same
+        if self.spatial_axis == 'count':
+            return original_answer
         
         return None  # Cannot determine expected answer
+    
+    def _get_expected_direction(self, original, transform):
+        """Get expected directional answer after transform."""
+        # Mapping: transform -> {original -> expected}
+        transform_maps = {
+            'hflip': {'left': 'right', 'right': 'left', 'above': 'above', 'below': 'below'},
+            'vflip': {'left': 'left', 'right': 'right', 'above': 'below', 'below': 'above'},
+            'rotate90': {'left': 'above', 'right': 'below', 'above': 'right', 'below': 'left'},
+            'rotate180': {'left': 'right', 'right': 'left', 'above': 'below', 'below': 'above'},
+            'rotate270': {'left': 'below', 'right': 'above', 'above': 'left', 'below': 'right'},
+        }
+        
+        if transform in transform_maps:
+            return transform_maps[transform].get(original, None)
+        return None
+    
+    def _get_expected_yesno(self, original, transform):
+        """Get expected yes/no answer after transform."""
+        # For horizontal axis questions (left/right)
+        if self.spatial_axis == 'horizontal':
+            if transform == 'hflip':
+                return 1 - original  # Flip the answer
+            elif transform == 'vflip':
+                return original  # No change
+            elif transform == 'rotate180':
+                return 1 - original  # Flip (left becomes right)
+            elif transform in ['rotate90', 'rotate270']:
+                return None  # Answer becomes about different axis
+        
+        # For vertical axis questions (above/below)
+        elif self.spatial_axis == 'vertical':
+            if transform == 'hflip':
+                return original  # No change
+            elif transform == 'vflip':
+                return 1 - original  # Flip the answer
+            elif transform == 'rotate180':
+                return 1 - original  # Flip (above becomes below)
+            elif transform in ['rotate90', 'rotate270']:
+                return None  # Answer becomes about different axis
+        
+        return original  # Default: no change
 
 
 # ============================================================================
@@ -453,30 +530,151 @@ def evaluate_consistency(model_name, image_path, questions, transforms=['origina
 
 
 # ============================================================================
+# MULTI-IMAGE EVALUATION
+# ============================================================================
+
+def evaluate_model_on_images(model_name, image_paths, questions, transforms):
+    """
+    Evaluate a model across multiple images.
+    
+    Args:
+        model_name: Name of model to test
+        image_paths: List of image paths
+        questions: List of SpatialQuestion objects
+        transforms: List of transforms to apply
+    
+    Returns:
+        Aggregated results dictionary
+    """
+    all_image_results = []
+    total_consistent = 0
+    total_inconsistent = 0
+    total_undetermined = 0
+    
+    for image_path in image_paths:
+        if not os.path.exists(image_path):
+            print(f"    ⚠️ Image not found: {image_path}")
+            continue
+            
+        print(f"\n    Testing image: {os.path.basename(image_path)}")
+        
+        try:
+            results = evaluate_consistency(
+                model_name=model_name,
+                image_path=image_path,
+                questions=questions,
+                transforms=transforms
+            )
+            results['image'] = image_path
+            all_image_results.append(results)
+            
+            total_consistent += results['metrics']['consistent']
+            total_inconsistent += results['metrics']['inconsistent']
+            total_undetermined += results['metrics']['undetermined']
+            
+            print(f"      Consistency: {results['metrics']['consistency_rate']:.2%}")
+            
+        except Exception as e:
+            print(f"      ❌ Error: {str(e)}")
+            all_image_results.append({
+                'image': image_path,
+                'error': str(e)
+            })
+    
+    # Calculate overall metrics
+    total_checks = total_consistent + total_inconsistent
+    overall_rate = total_consistent / total_checks if total_checks > 0 else 0.0
+    
+    return {
+        'model': model_name,
+        'num_images': len(image_paths),
+        'image_results': all_image_results,
+        'metrics': {
+            'consistency_rate': overall_rate,
+            'consistent': total_consistent,
+            'inconsistent': total_inconsistent,
+            'undetermined': total_undetermined,
+            'total_checks': total_checks
+        }
+    }
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 if __name__ == "__main__":
-    # Define spatial questions
+    import glob
+    
+    # ========================================================================
+    # CONFIGURATION
+    # ========================================================================
+    
+    # Test images - add your image paths here
+    # Will search for common image files in the assets directory
+    ASSETS_DIR = '/home/ubuntu/VLMEvalKit/assets'
+    
+    # Find all jpg/png images in assets directory
+    test_images = []
+    for ext in ['*.jpg', '*.jpeg', '*.png']:
+        test_images.extend(glob.glob(os.path.join(ASSETS_DIR, ext)))
+    
+    # If no images found, fall back to the default
+    if not test_images:
+        test_images = [IMAGE_PTH]
+    
+    # Limit to first 5 images to keep runtime reasonable
+    MAX_IMAGES = 5
+    test_images = sorted(test_images)[:MAX_IMAGES]
+    
+    # ========================================================================
+    # SPATIAL QUESTIONS
+    # ========================================================================
+    # Define questions for spatial consistency testing
+    # Each question targets left/right or above/below relations
+    
     questions = [
+        # Left/Right questions (horizontal axis)
         SpatialQuestion(
-            "Are the chopsticks to the left or right of the bowl?",
+            "Are the chopsticks to the left or right of the bowl? Answer with just 'left' or 'right'.",
             question_type='spatial',
-            expected_flip_behavior='opposite'
+            spatial_axis='horizontal'
         ),
         SpatialQuestion(
-            "Is the spoon to the left of the bowl?",
+            "Is the spoon to the left of the bowl? Answer with just 'yes' or 'no'.",
             question_type='spatial',
-            expected_flip_behavior='opposite'
+            spatial_axis='horizontal'
         ),
         SpatialQuestion(
-            "Is the bowl above the chopsticks?",
+            "What objects are on the left side of the image?",
             question_type='spatial',
-            expected_flip_behavior='same'
+            spatial_axis='horizontal'
+        ),
+        
+        # Above/Below questions (vertical axis)
+        SpatialQuestion(
+            "Is the bowl above the chopsticks? Answer with just 'yes' or 'no'.",
+            question_type='spatial',
+            spatial_axis='vertical'
+        ),
+        SpatialQuestion(
+            "What is at the top of the image?",
+            question_type='spatial',
+            spatial_axis='vertical'
+        ),
+        
+        # General spatial questions
+        SpatialQuestion(
+            "Describe the spatial arrangement of objects in this image.",
+            question_type='spatial',
+            spatial_axis='horizontal'
         ),
     ]
     
-    # Define models to test
+    # ========================================================================
+    # MODELS TO TEST
+    # ========================================================================
+    
     # Original VLMEval models
     vlmeval_models = ["llava_v1.5_7b"]
     
@@ -494,58 +692,63 @@ if __name__ == "__main__":
     # Combine all models
     model_list = vlmeval_models + custom_models
     
-    # Define transformations to test
-    transforms = ['original', 'hflip']  # Start with just horizontal flip
-    # transforms = ['original', 'hflip', 'rotate90', 'rotate180', 'rotate270']  # Add more later
+    # ========================================================================
+    # TRANSFORMATIONS
+    # ========================================================================
     
-    # Run evaluation
+    # All transformations for comprehensive testing
+    transforms = [
+        'original',   # No transformation (baseline)
+        'hflip',      # Horizontal flip (left<->right swap)
+        'vflip',      # Vertical flip (top<->bottom swap)
+        'rotate90',   # 90° counterclockwise rotation
+        'rotate180',  # 180° rotation
+        'rotate270',  # 270° counterclockwise rotation (same as 90° clockwise)
+    ]
+    
+    # ========================================================================
+    # RUN EVALUATION
+    # ========================================================================
+    
     all_results = []
     
     print("\n" + "="*80)
-    print("VLM CONSISTENCY TESTING WITH IMAGE TRANSFORMATIONS")
+    print("VLM SPATIAL CONSISTENCY TESTING - COMPREHENSIVE EVALUATION")
     print("="*80)
-    print(f"\nTesting {len(vlmeval_models)} VLMEval models + {len(custom_models)} custom models")
-    print(f"Custom models directory: {CUSTOM_MODELS_DIR}")
-    print(f"Test image: {IMAGE_PTH}")
+    print(f"\nConfiguration:")
+    print(f"  Models: {len(model_list)} ({len(vlmeval_models)} VLMEval + {len(custom_models)} custom)")
+    print(f"  Images: {len(test_images)}")
+    print(f"  Questions: {len(questions)}")
+    print(f"  Transforms: {len(transforms) - 1} (excluding original)")
+    print(f"  Total inference calls per model: {len(test_images) * len(questions) * len(transforms)}")
+    print(f"\nTest images:")
+    for img in test_images:
+        print(f"  - {os.path.basename(img)}")
+    print(f"\nTransformations: {', '.join(transforms)}")
+    print("="*80)
     
     for model_name in model_list:
         print(f"\n{'='*80}")
-        print(f"Testing model: {model_name}")
-        print("-" * 80)
+        print(f"TESTING MODEL: {model_name}")
+        print("="*80)
         
         try:
-            results = evaluate_consistency(
+            results = evaluate_model_on_images(
                 model_name=model_name,
-                image_path=IMAGE_PTH,
+                image_paths=test_images,
                 questions=questions,
                 transforms=transforms
             )
             
             all_results.append(results)
             
-            # Print results
-            print(f"\nOverall Metrics:")
-            print(f"  Consistency Rate: {results['metrics']['consistency_rate']:.2%}")
-            print(f"  Consistent: {results['metrics']['consistent']}")
-            print(f"  Inconsistent: {results['metrics']['inconsistent']}")
-            print(f"  Undetermined: {results['metrics']['undetermined']}")
+            # Print summary for this model
+            print(f"\n  📊 Model Summary:")
+            print(f"     Overall Consistency Rate: {results['metrics']['consistency_rate']:.2%}")
+            print(f"     Consistent: {results['metrics']['consistent']}")
+            print(f"     Inconsistent: {results['metrics']['inconsistent']}")
+            print(f"     Undetermined: {results['metrics']['undetermined']}")
             
-            print(f"\nDetailed Results:")
-            for q_result in results['questions']:
-                print(f"\n  Question: {q_result['question']}")
-                print(f"    Original answer: {q_result['answers']['original']['normalized']} " +
-                      f"(raw: {q_result['answers']['original']['raw'][:100] if q_result['answers']['original']['raw'] else 'None'}...)")
-                
-                for transform in transforms:
-                    if transform == 'original':
-                        continue
-                    
-                    ans = q_result['answers'][transform]
-                    cons = q_result['consistency'][transform]
-                    
-                    print(f"    {transform.capitalize()} answer: {ans['normalized']} " +
-                          f"(expected: {cons['expected']}, status: {cons['status']})")
-        
         except Exception as e:
             print(f"  ❌ Error testing {model_name}: {str(e)}")
             import traceback
@@ -555,31 +758,76 @@ if __name__ == "__main__":
                 'error': str(e),
                 'metrics': {'consistency_rate': 0.0}
             })
-            continue
         
-        # Clear GPU memory between models
+        # Clear GPU memory and model cache between models
+        if model_name in _custom_model_cache:
+            del _custom_model_cache[model_name]
+        
+        import gc
+        gc.collect()
+        
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
     
-    # Save results to JSON
-    output_file = '/home/ubuntu/VLMEvalKit/consistency_results.json'
+    # ========================================================================
+    # SAVE RESULTS
+    # ========================================================================
+    
+    output_file = '/home/ubuntu/VLMEvalKit/consistency_results_comprehensive.json'
     with open(output_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     
-    # Print summary table
+    # ========================================================================
+    # PRINT SUMMARY TABLE
+    # ========================================================================
+    
     print("\n" + "="*80)
-    print("SUMMARY TABLE")
+    print("SUMMARY TABLE - OVERALL CONSISTENCY RATES")
     print("="*80)
-    print(f"{'Model':<55} {'Consistency Rate':<20}")
+    print(f"{'Model':<55} {'Consistency':<15} {'Checks':<10}")
     print("-" * 80)
     
     for result in all_results:
         model_name = result['model']
-        if 'error' in result:
+        if 'error' in result and 'metrics' not in result:
             rate = 'ERROR'
+            checks = '-'
         else:
             rate = f"{result['metrics']['consistency_rate']:.2%}"
-        print(f"{model_name:<55} {rate:<20}")
+            checks = str(result['metrics'].get('total_checks', 0))
+        print(f"{model_name:<55} {rate:<15} {checks:<10}")
+    
+    # ========================================================================
+    # PRINT PER-TRANSFORM BREAKDOWN
+    # ========================================================================
+    
+    print("\n" + "="*80)
+    print("CONSISTENCY BY TRANSFORMATION TYPE")
+    print("="*80)
+    
+    # Calculate per-transform stats
+    transform_stats = {t: {'consistent': 0, 'inconsistent': 0} for t in transforms if t != 'original'}
+    
+    for result in all_results:
+        if 'image_results' not in result:
+            continue
+        for img_result in result['image_results']:
+            if 'questions' not in img_result:
+                continue
+            for q_result in img_result['questions']:
+                for t, cons in q_result.get('consistency', {}).items():
+                    if cons['status'] == 'consistent':
+                        transform_stats[t]['consistent'] += 1
+                    elif cons['status'] == 'inconsistent':
+                        transform_stats[t]['inconsistent'] += 1
+    
+    print(f"{'Transform':<15} {'Consistent':<12} {'Inconsistent':<12} {'Rate':<10}")
+    print("-" * 50)
+    for t, stats in transform_stats.items():
+        total = stats['consistent'] + stats['inconsistent']
+        rate = stats['consistent'] / total if total > 0 else 0
+        print(f"{t:<15} {stats['consistent']:<12} {stats['inconsistent']:<12} {rate:.2%}")
     
     print("\n" + "="*80)
     print(f"Results saved to: {output_file}")
